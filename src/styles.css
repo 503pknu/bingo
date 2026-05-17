@@ -519,6 +519,31 @@ label {
   flex-wrap: wrap;
 }
 
+.win-lines-panel {
+  border-color: #efc46d;
+}
+
+.line-options {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 7px;
+}
+
+.line-options button {
+  min-height: 42px;
+  border: 2px solid #e7c785;
+  border-radius: 8px;
+  color: var(--blue);
+  background: #fff8e5;
+  font-weight: 900;
+}
+
+.line-options button.active {
+  color: #fff;
+  border-color: var(--red);
+  background: var(--red);
+}
+
 .players {
   display: grid;
   gap: 8px;

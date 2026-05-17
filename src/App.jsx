@@ -84,6 +84,7 @@ export default function App() {
   const [name, setName] = useState(player.name || "");
   const [joinCode, setJoinCode] = useState(roomCode || "");
   const [ratios, setRatios] = useState(DEFAULT_RATIOS);
+  const [winLines, setWinLines] = useState(1);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -150,7 +151,7 @@ export default function App() {
   const calledFoods = room?.calledFoods || [];
   const latestFood = calledFoods.length ? getFood(calledFoods.at(-1)) : null;
   const board = me?.board || [];
-  const boardStatus = useMemo(() => buildBoardStatus(board, calledFoods), [board, calledFoods]);
+  const boardStatus = useMemo(() => buildBoardStatus(board, calledFoods, room?.winLines || 1), [board, calledFoods, room?.winLines]);
   const isHost = room?.hostId === player.id;
   const canStart = isHost && room?.status === "lobby" && players.length >= 2 && players.every((item) => item.board?.length === BOARD_SIZE);
   const turnOrder = room?.turnOrder || [];
@@ -174,6 +175,7 @@ export default function App() {
           name: me.name,
           completedAt: now(),
           line: boardStatus.line,
+          completedLines: boardStatus.completedLines,
         },
       }).catch(console.warn);
     }
@@ -196,6 +198,7 @@ export default function App() {
         turnOrder: [],
         turnIndex: 0,
         round: 0,
+        winLines,
         winner: null,
         players: {
           [nextPlayer.id]: buildRoomPlayer(nextPlayer),
@@ -268,10 +271,11 @@ export default function App() {
     await fbPatch(`rooms/${roomCode}`, {
       status: "playing",
       calledFoods: [],
-      turnOrder: shuffle(players.map((item) => item.id)),
+      turnOrder: players.map((item) => item.id),
       turnIndex: 0,
       round: 1,
       winner: null,
+      winLines,
       startedAt: now(),
     });
   }
@@ -378,6 +382,9 @@ export default function App() {
         <section className="game-layout">
           <aside className="side">
             <RoomSummary room={room} players={players} isHost={isHost} />
+            {isHost && room.status === "lobby" && (
+              <WinLinesPanel value={winLines} onChange={setWinLines} />
+            )}
             <RatioPanel
               disabled={room.status !== "lobby"}
               ratios={ratios}
@@ -400,7 +407,7 @@ export default function App() {
                     <span style={{ "--country": countryOf(latestFood.countryId).color }}>{countryOf(latestFood.countryId).name}</span>
                   </p>
                 ) : (
-                  <p>게임이 시작되면 자기 차례에 빙고판에서 음식 하나를 클릭합니다.</p>
+                  <p>게임이 시작되면 자기 차례에 빙고판에서 음식 하나를 클릭합니다. 승리 조건은 {room.winLines || 1}줄입니다.</p>
                 )}
               </div>
               <div className="host-actions">
@@ -426,7 +433,7 @@ export default function App() {
                 <div className="winner-copy">
                   <span className="flower-burst" aria-hidden="true">✿ ❀ ✿</span>
                   <strong>{room.winner.name}님, 축하합니다!</strong>
-                  <span>{lineText(room.winner.line)} 빙고 완성</span>
+                <span>{room.winner.completedLines || 1}줄 빙고 완성</span>
                 </div>
               </div>
             )}
@@ -499,6 +506,26 @@ function FoodDecor() {
         <span key={`${item}-${index}`}>{item}</span>
       ))}
     </div>
+  );
+}
+
+function WinLinesPanel({ value, onChange }) {
+  return (
+    <section className="panel win-lines-panel">
+      <h2>승리 조건</h2>
+      <div className="line-options">
+        {[1, 2, 3, 4, 5].map((count) => (
+          <button
+            key={count}
+            type="button"
+            className={value === count ? "active" : ""}
+            onClick={() => onChange(count)}
+          >
+            {count}줄
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -598,7 +625,7 @@ function allocateCounts(ratios) {
   return counts;
 }
 
-function buildBoardStatus(board, calledFoods) {
+function buildBoardStatus(board, calledFoods, requiredLines = 1) {
   const marked = board.map((foodId) => calledFoods.includes(foodId));
   const lines = [
     [0, 1, 2, 3, 4],
@@ -614,8 +641,13 @@ function buildBoardStatus(board, calledFoods) {
     [0, 6, 12, 18, 24],
     [4, 8, 12, 16, 20],
   ];
-  const line = lines.find((items) => items.every((index) => marked[index]));
-  return { hasBingo: Boolean(line), line: line || null };
+  const completed = lines.filter((items) => items.every((index) => marked[index]));
+  return {
+    hasBingo: completed.length >= requiredLines,
+    line: completed[0] || null,
+    lines: completed,
+    completedLines: completed.length,
+  };
 }
 
 function statusText(room, players, currentTurnPlayer, myPlayerId) {
@@ -665,7 +697,7 @@ function nextTurnState(order, currentIndex, currentRound, playersById) {
   }
 
   return {
-    turnOrder: shuffle(liveOrder),
+    turnOrder: liveOrder,
     turnIndex: 0,
     round: (currentRound || 1) + 1,
   };
