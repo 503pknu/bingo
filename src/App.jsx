@@ -147,7 +147,10 @@ export default function App() {
   }, [roomCode]);
 
   const players = useMemo(() => Object.values(room?.players || {}).sort(sortByJoinedAt), [room]);
+  const spectators = useMemo(() => Object.values(room?.spectators || {}).sort(sortByJoinedAt), [room]);
   const me = room?.players?.[player.id] || null;
+  const spectatorMe = room?.spectators?.[player.id] || null;
+  const isSpectator = Boolean(spectatorMe && !me);
   const calledFoods = room?.calledFoods || [];
   const latestFood = calledFoods.length ? getFood(calledFoods.at(-1)) : null;
   const board = me?.board || [];
@@ -232,6 +235,15 @@ export default function App() {
         return setError("이 방은 이미 50명이 가득 찼습니다.");
       }
       const nextPlayer = { ...player, name: name.trim() };
+      if (target.status !== "lobby" && !target.players?.[nextPlayer.id]) {
+        const spectator = buildSpectator(nextPlayer);
+        await fbPatch(`rooms/${code}/spectators/${nextPlayer.id}`, spectator);
+        setPlayer(nextPlayer);
+        setRoomCode(code);
+        setRoom({ ...target, spectators: { ...(target.spectators || {}), [nextPlayer.id]: spectator } });
+        setMessage(`${code} 방에 관전자로 입장했습니다.`);
+        return;
+      }
       const roomPlayer = target.players?.[nextPlayer.id] || buildRoomPlayer(nextPlayer);
       await fbPatch(`rooms/${code}/players/${nextPlayer.id}`, {
         ...roomPlayer,
@@ -381,7 +393,7 @@ export default function App() {
       ) : (
         <section className="game-layout">
           <aside className="side">
-            <RoomSummary room={room} players={players} isHost={isHost} />
+            <RoomSummary room={room} players={players} spectators={spectators} isHost={isHost} isSpectator={isSpectator} />
             {isHost && room.status === "lobby" && (
               <WinLinesPanel value={winLines} onChange={setWinLines} />
             )}
@@ -393,13 +405,13 @@ export default function App() {
               onRandom={() => setRatios(randomRatios())}
               onSave={saveBoard}
             />
-            <PlayerList players={players} hostId={room.hostId} />
+            <PlayerList players={players} spectators={spectators} hostId={room.hostId} />
           </aside>
 
           <div className="board-zone">
             <div className="status-panel">
               <div>
-                <span className="eyebrow"><Users size={16} /> {players.length}/{MAX_PLAYERS}명 접속</span>
+                <span className="eyebrow"><Users size={16} /> 참가 {players.length}/{MAX_PLAYERS}명 · 관전 {spectators.length}명</span>
                 <h2>{statusText(room, players, currentTurnPlayer, player.id)}</h2>
                 {latestFood ? (
                   <p className="latest">
@@ -417,7 +429,7 @@ export default function App() {
                     게임 시작
                   </button>
                 )}
-                {room.status === "playing" && <span className={isMyTurn ? "turn-badge active" : "turn-badge"}>{isMyTurn ? "내 차례" : `${currentTurnPlayer?.name || "다음"} 차례`}</span>}
+                {room.status === "playing" && <span className={isMyTurn ? "turn-badge active" : "turn-badge"}>{isSpectator ? "관전 중" : isMyTurn ? "내 차례" : `${currentTurnPlayer?.name || "다음"} 차례`}</span>}
                 {isHost && (
                   <button type="button" onClick={resetRoom}>
                     <RefreshCw size={18} />
@@ -438,7 +450,7 @@ export default function App() {
               </div>
             )}
 
-            <BingoBoard board={board} calledFoods={calledFoods} line={boardStatus.line} canSelect={isMyTurn} onSelect={selectFood} />
+            <BingoBoard board={board} calledFoods={calledFoods} lines={boardStatus.lines} canSelect={isMyTurn} onSelect={selectFood} />
 
             <section className="called-panel">
               <h3>선택된 음식 {calledFoods.length}개</h3>
@@ -529,21 +541,22 @@ function WinLinesPanel({ value, onChange }) {
   );
 }
 
-function RoomSummary({ room, players, isHost }) {
+function RoomSummary({ room, players, spectators, isHost, isSpectator }) {
   return (
     <section className="panel summary">
-      <span className="eyebrow"><Crown size={16} /> {isHost ? "방장" : "참가자"}</span>
+      <span className="eyebrow"><Crown size={16} /> {isHost ? "방장" : isSpectator ? "관전자" : "참가자"}</span>
       <h2>{room.code}</h2>
-      <p>{room.status === "lobby" ? "로비에서 판을 준비 중입니다." : room.status === "playing" ? "게임 진행 중입니다." : "게임이 끝났습니다."}</p>
+      <p>{isSpectator ? "진행 중인 게임을 관전하고 있습니다." : room.status === "lobby" ? "로비에서 판을 준비 중입니다." : room.status === "playing" ? "게임 진행 중입니다." : "게임이 끝났습니다."}</p>
       <div className="mini-stats">
         <strong>{players.length}<span>명</span></strong>
         <strong>{players.filter((item) => item.ready).length}<span>준비</span></strong>
+        <strong>{spectators.length}<span>관전</span></strong>
       </div>
     </section>
   );
 }
 
-function PlayerList({ players, hostId }) {
+function PlayerList({ players, spectators, hostId }) {
   return (
     <section className="panel">
       <h2>참가자</h2>
@@ -556,11 +569,24 @@ function PlayerList({ players, hostId }) {
           </article>
         ))}
       </div>
+      {spectators.length > 0 && (
+        <>
+          <h2 className="spectator-title">관전자</h2>
+          <div className="players spectators">
+            {spectators.map((item) => (
+              <article key={item.id}>
+                <b>{item.name}</b>
+                <em>관전 중</em>
+              </article>
+            ))}
+          </div>
+        </>
+      )}
     </section>
   );
 }
 
-function BingoBoard({ board, calledFoods, line, canSelect, onSelect }) {
+function BingoBoard({ board, calledFoods, lines, canSelect, onSelect }) {
   if (!board.length) {
     return (
       <section className="empty-board">
@@ -571,13 +597,15 @@ function BingoBoard({ board, calledFoods, line, canSelect, onSelect }) {
     );
   }
 
+  const winningIndexes = new Set((lines || []).flat());
+
   return (
     <section className="bingo-board">
       {board.map((foodId, index) => {
         const food = getFood(foodId);
         const country = countryOf(food.countryId);
         const marked = calledFoods.includes(foodId);
-        const winning = line?.includes(index);
+        const winning = winningIndexes.has(index);
         return (
           <button
             key={`${foodId}-${index}`}
@@ -682,6 +710,16 @@ function buildRoomPlayer(player) {
     ready: false,
     joinedAt: now(),
     onlineAt: now(),
+  };
+}
+
+function buildSpectator(player) {
+  return {
+    id: player.id,
+    name: player.name,
+    joinedAt: now(),
+    onlineAt: now(),
+    spectator: true,
   };
 }
 
