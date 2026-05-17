@@ -224,7 +224,8 @@ p {
 .room-chip button,
 .host-actions button,
 .button-row button,
-.join-line button {
+.join-line button,
+.turn-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -236,6 +237,16 @@ p {
   color: var(--blue);
   background: #fff8e5;
   font-weight: 900;
+}
+
+.turn-badge {
+  color: var(--blue);
+}
+
+.turn-badge.active {
+  color: #fff;
+  border-color: var(--good);
+  background: var(--good);
 }
 
 .primary {
@@ -592,11 +603,16 @@ label {
 .winner {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 15px 18px;
+  justify-content: center;
+  gap: 14px;
+  padding: 20px 22px;
   color: #7a4d00;
-  background: #fff6d7;
-  border-color: #ead388;
+  background:
+    radial-gradient(circle at 18% 28%, rgba(255, 114, 164, 0.28), transparent 18%),
+    radial-gradient(circle at 84% 20%, rgba(255, 211, 90, 0.5), transparent 20%),
+    #fff6d7;
+  border-color: #f0bd3b;
+  text-align: center;
 }
 
 .winner svg {
@@ -605,7 +621,21 @@ label {
 }
 
 .winner strong {
-  font-size: 22px;
+  display: block;
+  color: var(--red);
+  font-size: clamp(24px, 3vw, 38px);
+}
+
+.winner-copy {
+  display: grid;
+  gap: 5px;
+  justify-items: center;
+}
+
+.flower-burst {
+  color: #d11c58;
+  font-size: 28px;
+  letter-spacing: 0.25em;
 }
 
 .bingo-board {
@@ -619,7 +649,7 @@ label {
   box-shadow: 0 16px 34px rgba(17, 61, 155, 0.14);
 }
 
-.bingo-board article {
+.bingo-board button {
   position: relative;
   display: grid;
   align-content: center;
@@ -637,30 +667,48 @@ label {
   transition: transform 0.16s, border-color 0.16s, background 0.16s;
 }
 
-.bingo-board article span {
+.bingo-board button:disabled {
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+.bingo-board button:not(:disabled):hover {
+  border-color: var(--red);
+  transform: translateY(-2px);
+}
+
+.bingo-board button span {
   color: var(--country);
   font-size: 12px;
   font-weight: 900;
 }
 
-.bingo-board article strong {
+.bingo-board button strong {
   overflow-wrap: anywhere;
   line-height: 1.25;
 }
 
-.bingo-board article.marked {
+.bingo-board button.marked {
   color: #fff;
   border-color: var(--country);
   background: var(--country);
   transform: translateY(-1px) rotate(-1deg);
 }
 
-.bingo-board article.marked span {
+.bingo-board button.marked span {
   color: rgba(255, 255, 255, 0.82);
 }
 
-.bingo-board article.winning {
-  box-shadow: 0 0 0 4px rgba(255, 211, 90, 0.88), 0 12px 28px rgba(30, 38, 82, 0.2);
+.bingo-board button.winning {
+  color: #fff;
+  border-color: #8f070b;
+  background: #c51f24;
+  box-shadow: 0 0 0 5px rgba(197, 31, 36, 0.34), 0 14px 30px rgba(143, 7, 11, 0.32);
+  transform: translateY(-2px) scale(1.02);
+}
+
+.bingo-board button.winning span {
+  color: rgba(255, 255, 255, 0.84);
 }
 
 .empty-board {
@@ -777,16 +825,16 @@ label {
     border-width: 3px;
   }
 
-  .bingo-board article {
+  .bingo-board button {
     min-height: 68px;
     padding: 5px;
   }
 
-  .bingo-board article span {
+  .bingo-board button span {
     font-size: 10px;
   }
 
-  .bingo-board article strong {
+  .bingo-board button strong {
     font-size: 12px;
   }
 

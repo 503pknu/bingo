@@ -3,7 +3,6 @@ import {
   ChefHat,
   Clipboard,
   Crown,
-  Dice5,
   DoorOpen,
   Loader2,
   Play,
@@ -154,6 +153,10 @@ export default function App() {
   const boardStatus = useMemo(() => buildBoardStatus(board, calledFoods), [board, calledFoods]);
   const isHost = room?.hostId === player.id;
   const canStart = isHost && room?.status === "lobby" && players.length >= 2 && players.every((item) => item.board?.length === BOARD_SIZE);
+  const turnOrder = room?.turnOrder || [];
+  const currentTurnId = room?.status === "playing" ? turnOrder[room?.turnIndex || 0] : "";
+  const currentTurnPlayer = players.find((item) => item.id === currentTurnId) || null;
+  const isMyTurn = room?.status === "playing" && currentTurnId === player.id && !room?.winner;
   const ratioTotal = Object.values(ratios).reduce((sum, value) => sum + Number(value || 0), 0);
 
   function clearAlerts() {
@@ -190,7 +193,9 @@ export default function App() {
         maxPlayers: MAX_PLAYERS,
         createdAt: now(),
         calledFoods: [],
-        drawOrder: [],
+        turnOrder: [],
+        turnIndex: 0,
+        round: 0,
         winner: null,
         players: {
           [nextPlayer.id]: buildRoomPlayer(nextPlayer),
@@ -262,28 +267,41 @@ export default function App() {
     if (!canStart) return;
     await fbPatch(`rooms/${roomCode}`, {
       status: "playing",
-      drawOrder: shuffle(FOOD_POOL.map((food) => food.id)),
       calledFoods: [],
+      turnOrder: shuffle(players.map((item) => item.id)),
+      turnIndex: 0,
+      round: 1,
       winner: null,
       startedAt: now(),
     });
   }
 
-  async function callNextFood() {
+  async function selectFood(foodId) {
     clearAlerts();
     const current = roomRef.current;
-    if (!current || !isHost || current.status !== "playing" || current.winner) return;
-    const called = current.calledFoods || [];
-    const drawOrder = current.drawOrder?.length ? current.drawOrder : shuffle(FOOD_POOL.map((food) => food.id));
-    const nextFood = drawOrder.find((id) => !called.includes(id));
-    if (!nextFood) {
-      await fbPatch(`rooms/${roomCode}`, { status: "finished" });
+    if (!current || current.status !== "playing" || current.winner) return;
+    const order = current.turnOrder?.length ? current.turnOrder : shuffle(Object.keys(current.players || {}));
+    const activePlayerId = order[current.turnIndex || 0];
+    if (activePlayerId !== player.id) {
+      setError("아직 내 차례가 아닙니다.");
       return;
     }
+    const called = current.calledFoods || [];
+    if (called.includes(foodId)) {
+      setError("이미 선택된 음식입니다. 다른 음식을 골라주세요.");
+      return;
+    }
+    if (!current.players?.[player.id]?.board?.includes(foodId)) return;
+    const turn = nextTurnState(order, current.turnIndex || 0, current.round || 1, current.players || {});
     await fbPatch(`rooms/${roomCode}`, {
-      drawOrder,
-      calledFoods: [...called, nextFood],
-      lastCalledAt: now(),
+      calledFoods: [...called, foodId],
+      turnOrder: turn.turnOrder,
+      turnIndex: turn.turnIndex,
+      round: turn.round,
+      lastSelectedFood: foodId,
+      lastSelectedBy: player.id,
+      lastSelectedByName: me?.name || player.name,
+      lastSelectedAt: now(),
     });
   }
 
@@ -293,7 +311,9 @@ export default function App() {
     await fbPatch(`rooms/${roomCode}`, {
       status: "lobby",
       calledFoods: [],
-      drawOrder: [],
+      turnOrder: [],
+      turnIndex: 0,
+      round: 0,
       winner: null,
       resetAt: now(),
     });
@@ -373,14 +393,14 @@ export default function App() {
             <div className="status-panel">
               <div>
                 <span className="eyebrow"><Users size={16} /> {players.length}/{MAX_PLAYERS}명 접속</span>
-                <h2>{statusText(room, players)}</h2>
+                <h2>{statusText(room, players, currentTurnPlayer, player.id)}</h2>
                 {latestFood ? (
                   <p className="latest">
-                    방금 나온 음식 <b>{latestFood.name}</b>
+                    선택된 음식 <b>{latestFood.name}</b>
                     <span style={{ "--country": countryOf(latestFood.countryId).color }}>{countryOf(latestFood.countryId).name}</span>
                   </p>
                 ) : (
-                  <p>게임이 시작되면 방장이 음식을 하나씩 뽑습니다.</p>
+                  <p>게임이 시작되면 자기 차례에 빙고판에서 음식 하나를 클릭합니다.</p>
                 )}
               </div>
               <div className="host-actions">
@@ -390,12 +410,7 @@ export default function App() {
                     게임 시작
                   </button>
                 )}
-                {room.status === "playing" && (
-                  <button className="primary" type="button" disabled={!isHost || !!room.winner} onClick={callNextFood}>
-                    <Dice5 size={18} />
-                    음식 뽑기
-                  </button>
-                )}
+                {room.status === "playing" && <span className={isMyTurn ? "turn-badge active" : "turn-badge"}>{isMyTurn ? "내 차례" : `${currentTurnPlayer?.name || "다음"} 차례`}</span>}
                 {isHost && (
                   <button type="button" onClick={resetRoom}>
                     <RefreshCw size={18} />
@@ -408,15 +423,18 @@ export default function App() {
             {room.winner && (
               <div className="winner">
                 <Trophy size={28} />
-                <strong>{room.winner.name} 승리!</strong>
-                <span>{lineText(room.winner.line)} 완성</span>
+                <div className="winner-copy">
+                  <span className="flower-burst" aria-hidden="true">✿ ❀ ✿</span>
+                  <strong>{room.winner.name}님, 축하합니다!</strong>
+                  <span>{lineText(room.winner.line)} 빙고 완성</span>
+                </div>
               </div>
             )}
 
-            <BingoBoard board={board} calledFoods={calledFoods} line={boardStatus.line} />
+            <BingoBoard board={board} calledFoods={calledFoods} line={boardStatus.line} canSelect={isMyTurn} onSelect={selectFood} />
 
             <section className="called-panel">
-              <h3>뽑힌 음식 {calledFoods.length}개</h3>
+              <h3>선택된 음식 {calledFoods.length}개</h3>
               <div className="called-list">
                 {calledFoods.map((foodId) => {
                   const food = getFood(foodId);
@@ -515,7 +533,7 @@ function PlayerList({ players, hostId }) {
   );
 }
 
-function BingoBoard({ board, calledFoods, line }) {
+function BingoBoard({ board, calledFoods, line, canSelect, onSelect }) {
   if (!board.length) {
     return (
       <section className="empty-board">
@@ -534,10 +552,17 @@ function BingoBoard({ board, calledFoods, line }) {
         const marked = calledFoods.includes(foodId);
         const winning = line?.includes(index);
         return (
-          <article key={`${foodId}-${index}`} className={`${marked ? "marked" : ""} ${winning ? "winning" : ""}`} style={{ "--country": country.color }}>
+          <button
+            key={`${foodId}-${index}`}
+            type="button"
+            className={`${marked ? "marked" : ""} ${winning ? "winning" : ""}`}
+            style={{ "--country": country.color }}
+            disabled={!canSelect || marked}
+            onClick={() => onSelect(foodId)}
+          >
             <span>{country.name}</span>
             <strong>{food.name}</strong>
-          </article>
+          </button>
         );
       })}
     </section>
@@ -593,13 +618,16 @@ function buildBoardStatus(board, calledFoods) {
   return { hasBingo: Boolean(line), line: line || null };
 }
 
-function statusText(room, players) {
+function statusText(room, players, currentTurnPlayer, myPlayerId) {
   if (room.winner) return `${room.winner.name}님이 빙고를 완성했습니다`;
   if (room.status === "lobby") {
     if (players.length < 2) return "최소 2명이 모이면 시작할 수 있습니다";
     return "모두 판을 만들면 방장이 시작할 수 있습니다";
   }
-  if (room.status === "playing") return "음식을 뽑고 있습니다";
+  if (room.status === "playing") {
+    if (!currentTurnPlayer) return "차례를 준비하고 있습니다";
+    return currentTurnPlayer.id === myPlayerId ? "내 차례입니다. 음식 하나를 클릭하세요" : `${currentTurnPlayer.name}님의 차례입니다`;
+  }
   return "게임 종료";
 }
 
@@ -622,6 +650,24 @@ function buildRoomPlayer(player) {
     ready: false,
     joinedAt: now(),
     onlineAt: now(),
+  };
+}
+
+function nextTurnState(order, currentIndex, currentRound, playersById) {
+  const liveOrder = order.filter((id) => playersById[id]);
+  if (liveOrder.length === 0) {
+    const fallback = shuffle(Object.keys(playersById));
+    return { turnOrder: fallback, turnIndex: 0, round: currentRound || 1 };
+  }
+
+  if (currentIndex < liveOrder.length - 1) {
+    return { turnOrder: liveOrder, turnIndex: currentIndex + 1, round: currentRound || 1 };
+  }
+
+  return {
+    turnOrder: shuffle(liveOrder),
+    turnIndex: 0,
+    round: (currentRound || 1) + 1,
   };
 }
 
