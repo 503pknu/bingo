@@ -214,7 +214,7 @@ export default function App() {
     clearAlerts();
     const code = joinCode.trim().toUpperCase();
     if (!name.trim()) return setError("이름을 입력해주세요.");
-    if (!/^[A-Z0-9]{5}$/.test(code)) return setError("방 코드는 5자리입니다.");
+    if (!/^\d{4}$/.test(code)) return setError("방 코드는 숫자 4자리입니다.");
     setLoading(true);
     try {
       const target = await fbGet(`rooms/${code}`);
@@ -346,7 +346,7 @@ export default function App() {
               새 방 만들기
             </button>
             <div className="join-line">
-              <input value={joinCode} maxLength={5} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="방 코드" />
+              <input value={joinCode} inputMode="numeric" maxLength={4} onChange={(event) => setJoinCode(event.target.value.replace(/\D/g, "").slice(0, 4))} placeholder="방 코드" />
               <button type="button" disabled={loading} onClick={joinRoom}>
                 <DoorOpen size={18} />
                 참가
@@ -362,7 +362,7 @@ export default function App() {
               disabled={room.status !== "lobby"}
               ratios={ratios}
               total={ratioTotal}
-              onChange={(countryId, value) => setRatios((current) => ({ ...current, [countryId]: Number(value) }))}
+              onChange={(countryId, value) => setRatios((current) => rebalanceRatios(current, countryId, Number(value)))}
               onRandom={() => setRatios(randomRatios())}
               onSave={saveBoard}
             />
@@ -625,6 +625,65 @@ function buildRoomPlayer(player) {
   };
 }
 
+function rebalanceRatios(current, changedId, nextValue) {
+  const clampedValue = clampToStep(nextValue, 0, 100, 5);
+  const others = COUNTRIES.filter((country) => country.id !== changedId).map((country) => country.id);
+  const remaining = 100 - clampedValue;
+  const otherTotal = others.reduce((sum, id) => sum + Number(current[id] || 0), 0);
+
+  if (remaining === 0) {
+    return {
+      ...Object.fromEntries(COUNTRIES.map((country) => [country.id, 0])),
+      [changedId]: 100,
+    };
+  }
+
+  if (otherTotal === 0) {
+    const base = Math.floor(remaining / others.length / 5) * 5;
+    const next = {
+      ...Object.fromEntries(COUNTRIES.map((country) => [country.id, 0])),
+      [changedId]: clampedValue,
+    };
+    let leftover = remaining;
+    for (const id of others) {
+      next[id] = Math.min(base, leftover);
+      leftover -= next[id];
+    }
+    let index = 0;
+    while (leftover > 0) {
+      next[others[index % others.length]] += 5;
+      leftover -= 5;
+      index += 1;
+    }
+    return next;
+  }
+
+  const exact = others.map((id) => {
+    const raw = (Number(current[id] || 0) / otherTotal) * remaining;
+    const stepped = Math.floor(raw / 5) * 5;
+    return { id, value: stepped, rest: raw - stepped };
+  });
+  const next = {
+    ...Object.fromEntries(COUNTRIES.map((country) => [country.id, 0])),
+    [changedId]: clampedValue,
+  };
+  for (const item of exact) next[item.id] = item.value;
+
+  let diff = 100 - Object.values(next).reduce((sum, value) => sum + value, 0);
+  for (const item of [...exact].sort((a, b) => b.rest - a.rest)) {
+    if (diff <= 0) break;
+    next[item.id] += 5;
+    diff -= 5;
+  }
+
+  return next;
+}
+
+function clampToStep(value, min, max, step) {
+  const clamped = Math.max(min, Math.min(max, Number(value) || 0));
+  return Math.round(clamped / step) * step;
+}
+
 function randomRatios() {
   const cuts = shuffle([0, 5, 10, 15, 20, 25, 30, 35, 40]).slice(0, COUNTRIES.length);
   const weights = COUNTRIES.map((_, index) => cuts[index] + 5);
@@ -645,7 +704,7 @@ function randomRatios() {
 
 async function makeUniqueRoomCode() {
   for (let index = 0; index < 10; index += 1) {
-    const code = Math.random().toString(36).slice(2, 7).toUpperCase();
+    const code = String(Math.floor(1000 + Math.random() * 9000));
     const existing = await fbGet(`rooms/${code}`);
     if (!existing) return code;
   }
