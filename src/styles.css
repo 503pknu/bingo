@@ -371,7 +371,7 @@ p {
 }
 
 .entry-panel::before {
-  content: "16 October 2025";
+  content: "Food Bingo";
   position: absolute;
   left: 50%;
   top: -18px;
