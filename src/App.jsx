@@ -121,11 +121,11 @@ export default function App() {
       stream = new EventSource(`${DB_URL}/rooms/${roomCode}.json`);
       stream.addEventListener("put", (event) => {
         if (stopped) return;
-        setRoom((current) => applyFirebaseStreamEvent(current, JSON.parse(event.data)));
+        setRoom((current) => applyFirebaseStreamEvent(current, JSON.parse(event.data), "put"));
       });
       stream.addEventListener("patch", (event) => {
         if (stopped) return;
-        setRoom((current) => applyFirebaseStreamEvent(current, JSON.parse(event.data)));
+        setRoom((current) => applyFirebaseStreamEvent(current, JSON.parse(event.data), "patch"));
       });
       stream.onerror = () => {
         if (!stopped && !fallbackTimer) {
@@ -758,10 +758,15 @@ function copyText(value) {
   navigator.clipboard?.writeText(value).catch(() => {});
 }
 
-function applyFirebaseStreamEvent(current, eventData) {
+function applyFirebaseStreamEvent(current, eventData, eventType) {
   if (!eventData) return current;
   const { path, data } = eventData;
-  if (path === "/") return data || null;
+  if (path === "/") {
+    if (eventType === "patch" && current && data && typeof data === "object") {
+      return { ...current, ...data };
+    }
+    return data || null;
+  }
 
   const next = current ? JSON.parse(JSON.stringify(current)) : {};
   const parts = path.split("/").filter(Boolean);
@@ -777,6 +782,15 @@ function applyFirebaseStreamEvent(current, eventData) {
   const key = parts.at(-1);
   if (data === null) {
     delete target[key];
+  } else if (
+    eventType === "patch" &&
+    target[key] &&
+    typeof target[key] === "object" &&
+    !Array.isArray(target[key]) &&
+    typeof data === "object" &&
+    !Array.isArray(data)
+  ) {
+    target[key] = { ...target[key], ...data };
   } else {
     target[key] = data;
   }
