@@ -314,12 +314,12 @@ p {
   color: var(--red);
   font-size: clamp(52px, 10.5vw, 136px);
   font-weight: 900;
-  line-height: 0.86;
+  line-height: 1.08;
   letter-spacing: 0;
   text-align: center;
   text-transform: uppercase;
   word-break: keep-all;
-  text-shadow: 0 7px 0 #f6d2a3;
+  text-shadow: 0 6px 0 #f6d2a3;
 }
 
 .entry-copy h1::before {
@@ -335,13 +335,13 @@ p {
 .entry-copy h1::after {
   content: "Day";
   display: block;
-  margin-top: 12px;
+  margin-top: 26px;
   color: var(--blue);
   font-family: Georgia, "Times New Roman", serif;
   font-size: clamp(36px, 5vw, 70px);
   font-style: italic;
   font-weight: 700;
-  line-height: 0.9;
+  line-height: 1;
   text-transform: none;
   text-shadow: none;
 }
