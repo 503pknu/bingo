@@ -19,6 +19,8 @@ const ROOM_KEY = "food_bingo_room";
 const MAX_PLAYERS = 50;
 const BOARD_SIZE = 25;
 const STREAM_FALLBACK_MS = 12000;
+const TURN_SECONDS = 5;
+const LOGO_SRC = "/assets/ps1-logo.jpg";
 
 const COUNTRIES = [
   { id: "korea", name: "한국", color: "#d64550" },
@@ -88,7 +90,9 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [turnCountdown, setTurnCountdown] = useState(TURN_SECONDS);
   const roomRef = useRef(room);
+  const autoSelectRef = useRef("");
 
   useEffect(() => {
     writeStorage(PLAYER_KEY, player);
@@ -184,6 +188,30 @@ export default function App() {
     }
   }, [boardStatus.hasBingo, boardStatus.line, me, player.id, room, roomCode]);
 
+  useEffect(() => {
+    if (!room || room.status !== "playing" || room.winner) {
+      setTurnCountdown(TURN_SECONDS);
+      return undefined;
+    }
+
+    const timer = window.setInterval(() => {
+      const started = Date.parse(roomRef.current?.turnStartedAt || "");
+      const duration = roomRef.current?.turnSeconds || TURN_SECONDS;
+      const elapsed = started ? Math.floor((Date.now() - started) / 1000) : 0;
+      const remaining = Math.max(0, duration - elapsed);
+      setTurnCountdown(remaining);
+
+      const current = roomRef.current;
+      if (!current || current.status !== "playing" || current.winner || remaining > 0) return;
+      const key = `${current.code}_${current.round || 1}_${current.turnIndex || 0}_${(current.calledFoods || []).length}`;
+      if (autoSelectRef.current === key) return;
+      autoSelectRef.current = key;
+      autoSelectExpiredTurn().catch(console.warn);
+    }, 250);
+
+    return () => window.clearInterval(timer);
+  }, [room?.status, room?.winner, room?.turnStartedAt, room?.turnIndex, room?.round]);
+
   async function createRoom() {
     clearAlerts();
     if (!name.trim()) return setError("이름을 입력해주세요.");
@@ -201,6 +229,8 @@ export default function App() {
         turnOrder: [],
         turnIndex: 0,
         round: 0,
+        turnStartedAt: "",
+        turnSeconds: TURN_SECONDS,
         winLines,
         winner: null,
         players: {
@@ -286,6 +316,8 @@ export default function App() {
       turnOrder: players.map((item) => item.id),
       turnIndex: 0,
       round: 1,
+      turnStartedAt: now(),
+      turnSeconds: TURN_SECONDS,
       winner: null,
       winLines,
       startedAt: now(),
@@ -308,28 +340,90 @@ export default function App() {
       return;
     }
     if (!current.players?.[player.id]?.board?.includes(foodId)) return;
+    const nextCalled = [...called, foodId];
+    const winner = findWinner(current.players || {}, nextCalled, current.winLines || 1);
     const turn = nextTurnState(order, current.turnIndex || 0, current.round || 1, current.players || {});
     await fbPatch(`rooms/${roomCode}`, {
-      calledFoods: [...called, foodId],
+      calledFoods: nextCalled,
       turnOrder: turn.turnOrder,
       turnIndex: turn.turnIndex,
       round: turn.round,
+      turnStartedAt: now(),
       lastSelectedFood: foodId,
       lastSelectedBy: player.id,
       lastSelectedByName: me?.name || player.name,
       lastSelectedAt: now(),
+      ...(winner ? { status: "finished", winner } : {}),
+    });
+  }
+
+  async function autoSelectExpiredTurn() {
+    const current = roomRef.current;
+    if (!current || current.status !== "playing" || current.winner) return;
+    const order = current.turnOrder?.length ? current.turnOrder : Object.keys(current.players || {});
+    const activePlayerId = order[current.turnIndex || 0];
+    const activePlayer = current.players?.[activePlayerId];
+    if (!activePlayer) return;
+
+    const called = current.calledFoods || [];
+    const choices = (activePlayer.board || []).filter((foodId) => !called.includes(foodId));
+    const turn = nextTurnState(order, current.turnIndex || 0, current.round || 1, current.players || {});
+
+    if (choices.length === 0) {
+      await fbPatch(`rooms/${roomCode}`, {
+        turnOrder: turn.turnOrder,
+        turnIndex: turn.turnIndex,
+        round: turn.round,
+        turnStartedAt: now(),
+      });
+      return;
+    }
+
+    const foodId = shuffle(choices)[0];
+    const nextCalled = [...called, foodId];
+    const winner = findWinner(current.players || {}, nextCalled, current.winLines || 1);
+    await fbPatch(`rooms/${roomCode}`, {
+      calledFoods: nextCalled,
+      turnOrder: turn.turnOrder,
+      turnIndex: turn.turnIndex,
+      round: turn.round,
+      turnStartedAt: now(),
+      lastSelectedFood: foodId,
+      lastSelectedBy: activePlayerId,
+      lastSelectedByName: activePlayer.name,
+      lastSelectedAt: now(),
+      autoSelected: true,
+      ...(winner ? { status: "finished", winner } : {}),
     });
   }
 
   async function resetRoom() {
     clearAlerts();
     if (!isHost) return;
+    const current = roomRef.current || {};
+    const resetPlayers = {};
+    for (const entry of [...Object.values(current.players || {}), ...Object.values(current.spectators || {})]) {
+      if (!entry?.id) continue;
+      resetPlayers[entry.id] = {
+        id: entry.id,
+        name: entry.name,
+        board: [],
+        ratios: DEFAULT_RATIOS,
+        ready: false,
+        joinedAt: entry.joinedAt || now(),
+        onlineAt: now(),
+      };
+    }
     await fbPatch(`rooms/${roomCode}`, {
       status: "lobby",
       calledFoods: [],
+      players: resetPlayers,
+      spectators: null,
       turnOrder: [],
       turnIndex: 0,
       round: 0,
+      turnStartedAt: "",
+      turnSeconds: TURN_SECONDS,
       winner: null,
       resetAt: now(),
     });
@@ -348,8 +442,8 @@ export default function App() {
       <FoodDecor />
       <header className="topbar">
         <button className="brand" type="button" onClick={leaveRoom}>
-          <span><Utensils size={22} /></span>
-          <strong><small>WORLD</small> Food Bingo</strong>
+          <img src={LOGO_SRC} alt="PS1" />
+          <strong><small>PS1</small> Food Bingo</strong>
         </button>
         {room && (
           <div className="room-chip">
@@ -368,8 +462,10 @@ export default function App() {
       {!roomCode || !room ? (
         <section className="entry">
           <div className="entry-copy">
+            <img className="hero-logo" src={LOGO_SRC} alt="PS1" />
             <span className="eyebrow"><ChefHat size={16} /> 7개 나라 음식 150개</span>
             <h1>음식으로 맞붙는 실시간 빙고</h1>
+            <b className="school-title">부경대학교 사회복지학 전공 빙고 게임</b>
             <p>방을 만들거나 참가한 뒤, 각자 원하는 나라별 비율로 25칸 음식판을 만듭니다. 최소 2명부터 시작할 수 있고 최대 50명까지 같은 방에 들어올 수 있습니다.</p>
           </div>
           <div className="entry-panel">
@@ -421,6 +517,12 @@ export default function App() {
                 ) : (
                   <p>게임이 시작되면 자기 차례에 빙고판에서 음식 하나를 클릭합니다. 승리 조건은 {room.winLines || 1}줄입니다.</p>
                 )}
+                {room.status === "playing" && !room.winner && (
+                  <div className="countdown">
+                    <span>{currentTurnPlayer?.name || "다음"} 선택 시간</span>
+                    <strong>{turnCountdown}</strong>
+                  </div>
+                )}
               </div>
               <div className="host-actions">
                 {room.status === "lobby" && (
@@ -433,7 +535,7 @@ export default function App() {
                 {isHost && (
                   <button type="button" onClick={resetRoom}>
                     <RefreshCw size={18} />
-                    다시 로비로
+                    재게임
                   </button>
                 )}
               </div>
@@ -676,6 +778,23 @@ function buildBoardStatus(board, calledFoods, requiredLines = 1) {
     lines: completed,
     completedLines: completed.length,
   };
+}
+
+function findWinner(playersById, calledFoods, requiredLines) {
+  const players = Object.values(playersById || {}).sort(sortByJoinedAt);
+  for (const player of players) {
+    const status = buildBoardStatus(player.board || [], calledFoods, requiredLines);
+    if (status.hasBingo) {
+      return {
+        playerId: player.id,
+        name: player.name,
+        completedAt: now(),
+        line: status.line,
+        completedLines: status.completedLines,
+      };
+    }
+  }
+  return null;
 }
 
 function statusText(room, players, currentTurnPlayer, myPlayerId) {
