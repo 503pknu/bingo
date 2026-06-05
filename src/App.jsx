@@ -16,11 +16,20 @@ import {
 const DB_URL = import.meta.env.VITE_FIREBASE_DATABASE_URL || "https://bingo503-default-rtdb.firebaseio.com";
 const PLAYER_KEY = "food_bingo_player";
 const ROOM_KEY = "food_bingo_room";
+const GATE_KEY = "food_bingo_gate";
 const MAX_PLAYERS = 50;
 const BOARD_SIZE = 25;
 const STREAM_FALLBACK_MS = 12000;
-const TURN_SECONDS = 5;
+const TURN_SECONDS = 15;
 const LOGO_SRC = "/assets/ps1-logo.jpg";
+
+const GATES = [
+  { id: "gate1", name: "1번 게이트" },
+  { id: "gate2", name: "2번 게이트" },
+  { id: "gate3", name: "3번 게이트" },
+  { id: "gate4", name: "4번 게이트" },
+  { id: "gate5", name: "5번 게이트" },
+];
 
 const COUNTRIES = [
   { id: "korea", name: "한국", color: "#d64550" },
@@ -81,6 +90,7 @@ const FOOD_DECOR = ["🍔", "🍩", "🥕", "🧁", "🍉", "🌮", "🍤", "�
 
 export default function App() {
   const [player, setPlayer] = useState(() => readStorage(PLAYER_KEY, makePlayer()));
+  const [gateId, setGateId] = useState(() => readStorage(GATE_KEY, GATES[0].id));
   const [roomCode, setRoomCode] = useState(() => readStorage(ROOM_KEY, ""));
   const [room, setRoom] = useState(null);
   const [name, setName] = useState(player.name || "");
@@ -93,10 +103,16 @@ export default function App() {
   const [turnCountdown, setTurnCountdown] = useState(TURN_SECONDS);
   const roomRef = useRef(room);
   const autoSelectRef = useRef("");
+  const selectedGate = GATES.find((gate) => gate.id === gateId) || GATES[0];
+  const roomPath = roomCode ? roomDbPath(gateId, roomCode) : "";
 
   useEffect(() => {
     writeStorage(PLAYER_KEY, player);
   }, [player]);
+
+  useEffect(() => {
+    writeStorage(GATE_KEY, gateId);
+  }, [gateId]);
 
   useEffect(() => {
     roomRef.current = room;
@@ -111,7 +127,7 @@ export default function App() {
 
     async function tick() {
       try {
-        const nextRoom = await fbGet(`rooms/${roomCode}`);
+        const nextRoom = await fbGet(roomPath);
         if (!stopped) {
           setRoom(nextRoom || null);
           if (!nextRoom) setError("방을 찾을 수 없습니다. 방 코드를 다시 확인해주세요.");
@@ -122,7 +138,7 @@ export default function App() {
     }
 
     if ("EventSource" in window) {
-      stream = new EventSource(`${DB_URL}/rooms/${roomCode}.json`);
+      stream = new EventSource(`${DB_URL}/${roomPath}.json`);
       stream.addEventListener("put", (event) => {
         if (stopped) return;
         setRoom((current) => applyFirebaseStreamEvent(current, JSON.parse(event.data), "put"));
@@ -148,7 +164,7 @@ export default function App() {
       if (stream) stream.close();
       if (fallbackTimer) window.clearInterval(fallbackTimer);
     };
-  }, [roomCode]);
+  }, [roomCode, roomPath]);
 
   const players = useMemo(() => Object.values(room?.players || {}).sort(sortByJoinedAt), [room]);
   const spectators = useMemo(() => Object.values(room?.spectators || {}).sort(sortByJoinedAt), [room]);
@@ -175,7 +191,7 @@ export default function App() {
   useEffect(() => {
     if (!room || !me || room.status !== "playing" || room.winner) return;
     if (boardStatus.hasBingo) {
-      fbPatch(`rooms/${roomCode}`, {
+      fbPatch(roomPath, {
         status: "finished",
         winner: {
           playerId: player.id,
@@ -217,10 +233,11 @@ export default function App() {
     if (!name.trim()) return setError("이름을 입력해주세요.");
     setLoading(true);
     try {
-      const code = await makeUniqueRoomCode();
+      const code = await makeUniqueRoomCode(gateId);
       const nextPlayer = { ...player, name: name.trim() };
       const newRoom = {
         code,
+        gateId,
         hostId: nextPlayer.id,
         status: "lobby",
         maxPlayers: MAX_PLAYERS,
@@ -237,7 +254,7 @@ export default function App() {
           [nextPlayer.id]: buildRoomPlayer(nextPlayer),
         },
       };
-      await fbPut(`rooms/${code}`, newRoom);
+      await fbPut(roomDbPath(gateId, code), newRoom);
       setPlayer(nextPlayer);
       setRoomCode(code);
       setJoinCode(code);
@@ -258,7 +275,7 @@ export default function App() {
     if (!/^\d{4}$/.test(code)) return setError("방 코드는 숫자 4자리입니다.");
     setLoading(true);
     try {
-      const target = await fbGet(`rooms/${code}`);
+      const target = await fbGet(roomDbPath(gateId, code));
       if (!target) return setError("존재하지 않는 방입니다.");
       const currentPlayers = Object.values(target.players || {});
       if (!target.players?.[player.id] && currentPlayers.length >= MAX_PLAYERS) {
@@ -267,7 +284,7 @@ export default function App() {
       const nextPlayer = { ...player, name: name.trim() };
       if (target.status !== "lobby" && !target.players?.[nextPlayer.id]) {
         const spectator = buildSpectator(nextPlayer);
-        await fbPatch(`rooms/${code}/spectators/${nextPlayer.id}`, spectator);
+        await fbPatch(`${roomDbPath(gateId, code)}/spectators/${nextPlayer.id}`, spectator);
         setPlayer(nextPlayer);
         setRoomCode(code);
         setRoom({ ...target, spectators: { ...(target.spectators || {}), [nextPlayer.id]: spectator } });
@@ -275,7 +292,7 @@ export default function App() {
         return;
       }
       const roomPlayer = target.players?.[nextPlayer.id] || buildRoomPlayer(nextPlayer);
-      await fbPatch(`rooms/${code}/players/${nextPlayer.id}`, {
+      await fbPatch(`${roomDbPath(gateId, code)}/players/${nextPlayer.id}`, {
         ...roomPlayer,
         name: nextPlayer.name,
         onlineAt: now(),
@@ -298,7 +315,7 @@ export default function App() {
     if (room?.status !== "lobby") return setError("게임 시작 후에는 빙고판을 바꿀 수 없습니다.");
     if (ratioTotal !== 100) return setError("나라별 비율 합계가 100%가 되어야 합니다.");
     const nextBoard = generateBoard(ratios);
-    await fbPatch(`rooms/${roomCode}/players/${player.id}`, {
+    await fbPatch(`${roomPath}/players/${player.id}`, {
       board: nextBoard,
       ratios,
       ready: true,
@@ -310,7 +327,7 @@ export default function App() {
   async function startGame() {
     clearAlerts();
     if (!canStart) return;
-    await fbPatch(`rooms/${roomCode}`, {
+    await fbPatch(roomPath, {
       status: "playing",
       calledFoods: [],
       turnOrder: players.map((item) => item.id),
@@ -343,7 +360,7 @@ export default function App() {
     const nextCalled = [...called, foodId];
     const winner = findWinner(current.players || {}, nextCalled, current.winLines || 1);
     const turn = nextTurnState(order, current.turnIndex || 0, current.round || 1, current.players || {});
-    await fbPatch(`rooms/${roomCode}`, {
+    await fbPatch(roomPath, {
       calledFoods: nextCalled,
       turnOrder: turn.turnOrder,
       turnIndex: turn.turnIndex,
@@ -370,7 +387,7 @@ export default function App() {
     const turn = nextTurnState(order, current.turnIndex || 0, current.round || 1, current.players || {});
 
     if (choices.length === 0) {
-      await fbPatch(`rooms/${roomCode}`, {
+      await fbPatch(roomPath, {
         turnOrder: turn.turnOrder,
         turnIndex: turn.turnIndex,
         round: turn.round,
@@ -382,7 +399,7 @@ export default function App() {
     const foodId = shuffle(choices)[0];
     const nextCalled = [...called, foodId];
     const winner = findWinner(current.players || {}, nextCalled, current.winLines || 1);
-    await fbPatch(`rooms/${roomCode}`, {
+    await fbPatch(roomPath, {
       calledFoods: nextCalled,
       turnOrder: turn.turnOrder,
       turnIndex: turn.turnIndex,
@@ -414,7 +431,7 @@ export default function App() {
         onlineAt: now(),
       };
     }
-    await fbPatch(`rooms/${roomCode}`, {
+    await fbPatch(roomPath, {
       status: "lobby",
       calledFoods: [],
       players: resetPlayers,
@@ -447,7 +464,7 @@ export default function App() {
         </button>
         {room && (
           <div className="room-chip">
-            <span>방 코드</span>
+            <span>{selectedGate.name} · 방 코드</span>
             <b>{roomCode}</b>
             <button type="button" title="방 코드 복사" onClick={() => copyText(roomCode)}>
               <Clipboard size={16} />
@@ -466,9 +483,10 @@ export default function App() {
             <span className="eyebrow"><ChefHat size={16} /> 7개 나라 음식 150개</span>
             <h1>음식으로 맞붙는 실시간 빙고</h1>
             <b className="school-title">부경대학교 사회복지학 전공 빙고 게임</b>
-            <p>방을 만들거나 참가한 뒤, 각자 원하는 나라별 비율로 25칸 음식판을 만듭니다. 최소 2명부터 시작할 수 있고 최대 50명까지 같은 방에 들어올 수 있습니다.</p>
+            <p>먼저 5개 게이트 중 하나를 고르고, 방을 만들거나 참가하세요. 같은 게이트 안의 같은 방 코드끼리만 함께 게임합니다.</p>
           </div>
           <div className="entry-panel">
+            <GateSelector value={gateId} onChange={setGateId} disabled={loading || Boolean(roomCode)} />
             <label>
               플레이어 이름
               <input value={name} maxLength={16} onChange={(event) => setName(event.target.value)} placeholder="예: 민수" />
@@ -620,6 +638,27 @@ function FoodDecor() {
         <span key={`${item}-${index}`}>{item}</span>
       ))}
     </div>
+  );
+}
+
+function GateSelector({ value, onChange, disabled }) {
+  return (
+    <section className="gate-selector">
+      <span>입장 게이트</span>
+      <div>
+        {GATES.map((gate) => (
+          <button
+            key={gate.id}
+            type="button"
+            className={value === gate.id ? "active" : ""}
+            disabled={disabled}
+            onClick={() => onChange(gate.id)}
+          >
+            {gate.name}
+          </button>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -937,13 +976,21 @@ function randomRatios() {
   return Object.fromEntries(COUNTRIES.map((country, countryIndex) => [country.id, rounded[countryIndex]]));
 }
 
-async function makeUniqueRoomCode() {
+async function makeUniqueRoomCode(gateId) {
   for (let index = 0; index < 10; index += 1) {
     const code = String(Math.floor(1000 + Math.random() * 9000));
-    const existing = await fbGet(`rooms/${code}`);
+    const existing = await fbGet(roomDbPath(gateId, code));
     if (!existing) return code;
   }
   throw new Error("Cannot allocate room code");
+}
+
+function roomDbPath(gateId, roomCode) {
+  return `rooms/${firebaseKey(gateId || GATES[0].id)}/${firebaseKey(roomCode)}`;
+}
+
+function firebaseKey(value) {
+  return String(value).replace(/[.$#[\]/]/g, "_");
 }
 
 function getFood(id) {
